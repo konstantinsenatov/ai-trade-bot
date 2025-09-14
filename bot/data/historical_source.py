@@ -1,10 +1,8 @@
 """Historical OHLCV data source for real market data."""
 
 import csv
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Protocol
 
 # OHLCV tuple: (timestamp, open, high, low, close, volume)
 OHLCVBar = tuple[int, float, float, float, float, int]
@@ -22,7 +20,7 @@ class HistoricalOHLCV:
         """
         self.symbol = symbol
         self.timeframe = timeframe
-        self.data_cache = {}
+        self.data_cache: dict[str, list[OHLCVBar]] = {}
 
     def load(self, tf: str, bars: int) -> list[OHLCVBar]:
         """Load historical OHLCV data for the last 2 years.
@@ -39,10 +37,7 @@ class HistoricalOHLCV:
         start_date = end_date - timedelta(days=730)  # 2 years
 
         # Timeframe to seconds mapping
-        tf_seconds = {
-            "1m": 60, "5m": 300, "15m": 900, 
-            "1h": 3600, "4h": 14400, "1d": 86400
-        }
+        tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 
         if tf not in tf_seconds:
             raise ValueError(f"Unsupported timeframe: {tf}")
@@ -53,28 +48,25 @@ class HistoricalOHLCV:
         return self._generate_realistic_data(start_date, end_date, interval_seconds)
 
     def _generate_realistic_data(
-        self, 
-        start_date: datetime, 
-        end_date: datetime, 
-        interval_seconds: int
+        self, start_date: datetime, end_date: datetime, interval_seconds: int
     ) -> list[OHLCVBar]:
         """Generate realistic historical data based on BTC patterns."""
-        
+
         # BTC price evolution over 2 years (approximate)
         price_milestones = [
             (datetime(2022, 9, 13), 20000.0),  # Start of bear market
             (datetime(2022, 11, 21), 16000.0),  # FTX crash
-            (datetime(2023, 1, 1), 16500.0),   # New year recovery
+            (datetime(2023, 1, 1), 16500.0),  # New year recovery
             (datetime(2023, 3, 10), 20000.0),  # Banking crisis
-            (datetime(2023, 6, 1), 27000.0),   # Summer rally
-            (datetime(2023, 9, 1), 26000.0),   # September correction
+            (datetime(2023, 6, 1), 27000.0),  # Summer rally
+            (datetime(2023, 9, 1), 26000.0),  # September correction
             (datetime(2023, 10, 1), 27000.0),  # October recovery
             (datetime(2023, 12, 1), 38000.0),  # December rally
-            (datetime(2024, 1, 1), 42000.0),   # New year high
-            (datetime(2024, 3, 1), 65000.0),   # March ATH
-            (datetime(2024, 6, 1), 70000.0),   # June high
-            (datetime(2024, 9, 1), 95000.0),   # September ATH
-            (datetime.now(), 100000.0),        # Current price
+            (datetime(2024, 1, 1), 42000.0),  # New year high
+            (datetime(2024, 3, 1), 65000.0),  # March ATH
+            (datetime(2024, 6, 1), 70000.0),  # June high
+            (datetime(2024, 9, 1), 95000.0),  # September ATH
+            (datetime.now(), 100000.0),  # Current price
         ]
 
         bars_data = []
@@ -93,9 +85,9 @@ class HistoricalOHLCV:
             # Add realistic volatility
             daily_volatility = 0.03  # 3% daily volatility
             price_change = self._generate_price_change(daily_volatility, price_trend)
-            
+
             new_price = current_price * (1 + price_change)
-            
+
             # Generate OHLC from price movement
             open_price = current_price
             close_price = new_price
@@ -108,16 +100,20 @@ class HistoricalOHLCV:
             # Generate realistic volume (higher during volatile periods)
             base_volume = 1000000  # Base volume
             volatility_multiplier = 1 + abs(price_change) * 3
-            volume = int(base_volume * volatility_multiplier * self._get_volume_factor(current_date))
+            volume = int(
+                base_volume * volatility_multiplier * self._get_volume_factor(current_date)
+            )
 
-            bars_data.append((
-                current_timestamp, 
-                round(open_price, 2), 
-                round(high_price, 2), 
-                round(low_price, 2), 
-                round(close_price, 2), 
-                volume
-            ))
+            bars_data.append(
+                (
+                    current_timestamp,
+                    round(open_price, 2),
+                    round(high_price, 2),
+                    round(low_price, 2),
+                    round(close_price, 2),
+                    volume,
+                )
+            )
 
             current_price = new_price
             current_timestamp += interval_seconds
@@ -131,32 +127,32 @@ class HistoricalOHLCV:
                 if i == 0:
                     return price
                 # Interpolate between previous and current milestone
-                prev_date, prev_price = milestones[i-1]
+                prev_date, prev_price = milestones[i - 1]
                 days_diff = (milestone_date - prev_date).days
                 if days_diff == 0:
                     return price
-                
+
                 current_days = (date - prev_date).days
                 price_diff = price - prev_price
                 interpolated_price = prev_price + (price_diff * current_days / days_diff)
                 return interpolated_price
-        
+
         return milestones[-1][1]  # Return last price if beyond milestones
 
     def _generate_price_change(self, volatility: float, trend: float) -> float:
         """Generate realistic price change."""
         import random
-        
+
         # Random walk with trend
         random_component = random.gauss(0, volatility)
         trend_component = trend * 0.1  # Small trend influence
-        
+
         return random_component + trend_component
 
     def _get_volume_factor(self, date: datetime) -> float:
         """Get volume factor based on market conditions."""
         import random
-        
+
         # Higher volume during market stress periods
         if date.month in [3, 10]:  # March and October often volatile
             return random.uniform(1.2, 1.8)
@@ -169,13 +165,13 @@ class HistoricalOHLCV:
         """Save historical data to CSV file."""
         output_path = Path("user_data") / filename
         output_path.parent.mkdir(exist_ok=True)
-        
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+
+        with open(output_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            
+            writer.writerow(["timestamp", "open", "high", "low", "close", "volume"])
+
             for bar in data:
                 writer.writerow(bar)
-        
+
         print(f"Historical data saved to: {output_path}")
         return output_path

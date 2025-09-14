@@ -27,6 +27,8 @@ jobs:
   historical-backtest:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      TZ: UTC
 
     steps:
       - name: Checkout repository
@@ -37,6 +39,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: pip install -r requirements.txt requests

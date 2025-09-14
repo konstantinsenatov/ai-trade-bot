@@ -1,8 +1,10 @@
 """Date utilities for UTC timestamp handling and bar filtering."""
 
 from __future__ import annotations
+
+from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Iterable
+
 
 def to_ts_utc(s: str) -> int:
     """Convert date string to UTC timestamp."""
@@ -17,11 +19,13 @@ def to_ts_utc(s: str) -> int:
         dt = dt.replace(tzinfo=timezone.utc)
     return int(dt.astimezone(timezone.utc).timestamp())
 
+
 def iso_utc(ts: int | None) -> str:
     """Convert timestamp to ISO UTC string."""
     if ts is None:
         return "None"
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
 
 def filter_bars_by_date(
     bars: Iterable[tuple[int, float, float, float, float, int]],

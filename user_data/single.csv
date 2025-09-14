@@ -1,0 +1,2 @@
+mode,bars,fee,threshold,seed,trades,final_equity,win_rate,pf,max_dd,return_pct,total_fees
+close,50,0.001,0.005,42,2,9993.80254,0.0,,0.0008898363927929677,-0.06197459999999411,0.17746
