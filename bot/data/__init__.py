@@ -1,1 +1,1 @@
-"""Data loading modules for OHLCV data sources."""
+"""Data sources and providers."""
