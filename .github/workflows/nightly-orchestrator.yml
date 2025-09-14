@@ -45,7 +45,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh workflow run "2-Year Historical Backtest" \
+          gh workflow run ".github/workflows/bench-2y.yml" \
             --repo "${GITHUB_REPOSITORY}" \
             -f start_date="${{ steps.win.outputs.start }}" \
             -f end_date="${{ steps.win.outputs.end }}"
