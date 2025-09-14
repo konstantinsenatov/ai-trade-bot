@@ -1,0 +1,191 @@
+name: 2-Year Historical Backtest New
+
+on:
+  schedule:
+    # Run weekly on Sundays at 02:00 UTC
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (YYYY-MM-DD)"
+        required: false
+        default: ""
+      end_date:
+        description: "End date (YYYY-MM-DD)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  historical-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TZ: UTC
+    steps:
+      - name: Set up job
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -U pip
+          pip install -r requirements.txt
+
+      - name: Data source = real
+        run: echo "DATA_SOURCE=real" >> $GITHUB_ENV
+
+      - name: Compute 2y window (UTC)
+        run: |
+          set -euo pipefail
+          START="${{ inputs.start_date }}"
+          END="${{ inputs.end_date }}"
+          if [ -z "$START" ]; then START=$(date -u -d "2 years ago" +%F); fi
+          if [ -z "$END" ]; then END=$(date -u +%F); fi
+          echo "START=$START" >> $GITHUB_ENV
+          echo "END=$END" >> $GITHUB_ENV
+          echo "🗓 Окно: $START → $END (UTC)"
+
+      - name: Run 2-year backtest (close mode)
+        run: |
+          python3 scripts/historical_backtest.py \
+            --mode close \
+            --timeframe 1h \
+            --fee 0.001 \
+            --threshold 0.005 \
+            --symbol BTCUSDT \
+            --start "${{ env.START }}" \
+            --end "${{ env.END }}" \
+            --output artifacts/backtests/backtest_2y_close.csv
+
+      - name: Run 2-year backtest (onebar mode)
+        run: |
+          python3 scripts/historical_backtest.py \
+            --mode onebar \
+            --timeframe 1h \
+            --fee 0.001 \
+            --threshold 0.005 \
+            --symbol BTCUSDT \
+            --start "${{ env.START }}" \
+            --end "${{ env.END }}" \
+            --output artifacts/backtests/backtest_2y_onebar.csv
+
+      - name: Run batch optimization
+        run: |
+          python3 scripts/bench.py \
+            --start "${{ env.START }}" \
+            --end "${{ env.END }}" \
+            --seed 42 \
+            --output artifacts/backtests/batch_2y_range${{ env.START }}_${{ env.END }}.csv
+
+      - name: Generate project analysis
+        run: |
+          python3 scripts/select_best.py \
+            --input artifacts/backtests/batch_2y_range${{ env.START }}_${{ env.END }}.csv \
+            --output artifacts/reports/best_params.json
+
+      - name: Analyze results and prepare Telegram message
+        run: |
+          set -euo pipefail
+          
+          # Count CSV files
+          CSV_COUNT=$(find artifacts/backtests -name "*.csv" | wc -l)
+          echo "CSV_COUNT=$CSV_COUNT" >> $GITHUB_ENV
+          
+          # Check if files exist and get basic stats
+          if [ -f "artifacts/backtests/backtest_2y_close.csv" ]; then
+          CLOSE_TRADES=$(python3 -c "
+import csv
+try:
+    with open('artifacts/backtests/backtest_2y_close.csv', 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row['metric'] == 'trades':
+                print(row['value'])
+                break
+except:
+    print('0')
+          ")
+            echo "CLOSE_TRADES=$CLOSE_TRADES" >> $GITHUB_ENV
+          else
+            echo "CLOSE_TRADES=0" >> $GITHUB_ENV
+          fi
+          
+          if [ -f "artifacts/backtests/backtest_2y_onebar.csv" ]; then
+          ONEBAR_TRADES=$(python3 -c "
+import csv
+try:
+    with open('artifacts/backtests/backtest_2y_onebar.csv', 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row['metric'] == 'trades':
+                print(row['value'])
+                break
+except:
+    print('0')
+          ")
+            echo "ONEBAR_TRADES=$ONEBAR_TRADES" >> $GITHUB_ENV
+          else
+            echo "ONEBAR_TRADES=0" >> $GITHUB_ENV
+          fi
+
+      - name: Send Telegram notification (Success)
+        if: always() && job.status == 'success'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -sS -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d '{"chat_id":"'"$TELEGRAM_CHAT_ID"'","text":"✅ Bench-2y: Success! CSV files: ${{ env.CSV_COUNT }}, Close trades: ${{ env.CLOSE_TRADES }}, Onebar trades: ${{ env.ONEBAR_TRADES }}"}' || true
+
+      - name: Send Telegram notification (Failure)
+        if: always() && job.status == 'failure'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -sS -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d '{"chat_id":"'"$TELEGRAM_CHAT_ID"'","text":"❌ Bench-2y: Failed to complete optimization"}' || true
+
+      - name: Upload backtest artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ env.START }}_${{ env.END }}
+          path: artifacts/backtests/
+          retention-days: 30
+
+      - name: Upload project analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: analysis-${{ env.START }}_${{ env.END }}
+          path: artifacts/reports/
+          retention-days: 30
+
+      - name: Job summary
+        run: |
+          echo "## 📊 2-Year Historical Backtest Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date Window:** ${{ env.START }} → ${{ env.END }} (UTC)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Results:**" >> $GITHUB_STEP_SUMMARY
+          echo "- CSV files generated: ${{ env.CSV_COUNT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Close mode trades: ${{ env.CLOSE_TRADES }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Onebar mode trades: ${{ env.ONEBAR_TRADES }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifacts:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Backtest results: \`results-${{ env.START }}_${{ env.END }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Analysis: \`analysis-${{ env.START }}_${{ env.END }}\`" >> $GITHUB_STEP_SUMMARY
