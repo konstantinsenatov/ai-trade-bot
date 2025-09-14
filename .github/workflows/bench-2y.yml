@@ -122,36 +122,36 @@ jobs:
           
           # Check if files exist and get basic stats
           if [ -f "artifacts/backtests/backtest_2y_close.csv" ]; then
-            CLOSE_TRADES=$(python3 -c "
-            import csv
-            try:
-                with open('artifacts/backtests/backtest_2y_close.csv', 'r') as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        if row['metric'] == 'trades':
-                            print(row['value'])
-                            break
-            except:
-                print('0')
-            ")
+          CLOSE_TRADES=$(python3 -c "
+import csv
+try:
+    with open('artifacts/backtests/backtest_2y_close.csv', 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row['metric'] == 'trades':
+                print(row['value'])
+                break
+except:
+    print('0')
+          ")
             echo "CLOSE_TRADES=$CLOSE_TRADES" >> $GITHUB_ENV
           else
             echo "CLOSE_TRADES=0" >> $GITHUB_ENV
           fi
           
           if [ -f "artifacts/backtests/backtest_2y_onebar.csv" ]; then
-            ONEBAR_TRADES=$(python3 -c "
-            import csv
-            try:
-                with open('artifacts/backtests/backtest_2y_onebar.csv', 'r') as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        if row['metric'] == 'trades':
-                            print(row['value'])
-                            break
-            except:
-                print('0')
-            ")
+          ONEBAR_TRADES=$(python3 -c "
+import csv
+try:
+    with open('artifacts/backtests/backtest_2y_onebar.csv', 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row['metric'] == 'trades':
+                print(row['value'])
+                break
+except:
+    print('0')
+          ")
             echo "ONEBAR_TRADES=$ONEBAR_TRADES" >> $GITHUB_ENV
           else
             echo "ONEBAR_TRADES=0" >> $GITHUB_ENV
