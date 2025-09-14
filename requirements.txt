@@ -1,0 +1,14 @@
+openai>=1.40.0
+python-dotenv>=1.0.1
+pydantic>=2.7.0
+rich>=13.7.1
+click>=8.1.7
+GitPython>=3.1.43
+typer>=0.12.3
+requests>=2.31.0
+
+pytest>=8.2.0
+mypy>=1.10.0
+black>=24.8.0
+ruff>=0.5.5
+types-requests>=2.31.0
