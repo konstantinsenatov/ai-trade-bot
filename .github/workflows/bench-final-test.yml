@@ -1,0 +1,20 @@
+name: Bench Final Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (YYYY-MM-DD)"
+        required: false
+        default: ""
+      end_date:
+        description: "End date (YYYY-MM-DD)"
+        required: false
+        default: ""
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test
+        run: echo "Bench final test works! Start: ${{ inputs.start_date }}, End: ${{ inputs.end_date }}"
