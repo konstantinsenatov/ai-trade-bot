@@ -1,0 +1,258 @@
+name: 2-Year Historical Backtest
+
+on:
+  schedule:
+    # Run weekly on Sundays at 02:00 UTC
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (YYYY-MM-DD)"
+        required: false
+        default: ""
+      end_date:
+        description: "End date (YYYY-MM-DD)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  historical-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt requests
+
+      - name: Data source = real
+        run: echo "DATA_SOURCE=real" >> $GITHUB_ENV
+
+      - name: Compute 2y window (UTC)
+        run: |
+          if [ -n "${{ github.event.inputs.start_date }}" ] && [ -n "${{ github.event.inputs.end_date }}" ]; then
+            echo "START=${{ github.event.inputs.start_date }}" >> $GITHUB_ENV
+            echo "END=${{ github.event.inputs.end_date }}" >> $GITHUB_ENV
+          else
+            echo "START=$(date -u -d '2 years ago' +%F)" >> $GITHUB_ENV
+            echo "END=$(date -u +%F)" >> $GITHUB_ENV
+          fi
+          echo "Date range: $START to $END"
+
+      - name: Run 2-year backtest (close mode)
+        env:
+          START: ${{ env.START }}
+          END: ${{ env.END }}
+        run: |
+          echo "Running close mode backtest for period: $START to $END"
+          mkdir -p artifacts/backtests
+          python3 scripts/backtest.py \
+            --mode close \
+            --timeframe 1h \
+            --fee 0.001 \
+            --threshold 0.005 \
+            --start "$START" \
+            --end "$END" \
+            --out artifacts/backtests/backtest_2y_close.csv
+
+      - name: Run 2-year backtest (onebar mode)
+        env:
+          START: ${{ env.START }}
+          END: ${{ env.END }}
+        run: |
+          echo "Running onebar mode backtest for period: $START to $END"
+          python3 scripts/backtest.py \
+            --mode onebar \
+            --timeframe 1h \
+            --fee 0.001 \
+            --threshold 0.005 \
+            --start "$START" \
+            --end "$END" \
+            --out artifacts/backtests/backtest_2y_onebar.csv
+
+      - name: Run batch optimization
+        env:
+          START: ${{ env.START }}
+          END: ${{ env.END }}
+        run: |
+          echo "Running batch optimization for period: $START to $END"
+          python3 scripts/bench.py \
+            --modes close,onebar \
+            --bars 500 \
+            --fees 0.001,0.002 \
+            --thresholds 0.003,0.005,0.01 \
+            --seed 42 \
+            --start "$START" \
+            --end "$END" \
+            --out artifacts/backtests/batch_2y.csv
+
+      - name: Generate project analysis
+        run: |
+          echo "Generating project analysis..."
+          python3 scripts/autotodo.py
+
+      - name: Analyze results and prepare Telegram message
+        id: analyze_results
+        env:
+          START: ${{ env.START }}
+          END: ${{ env.END }}
+        run: |
+          # Count CSV files
+          CSV_COUNT=$(find artifacts/backtests -name "*.csv" | wc -l)
+          echo "CSV_COUNT=$CSV_COUNT" >> $GITHUB_ENV
+          
+          # Check if files exist and get basic stats
+          if [ -f "artifacts/backtests/backtest_2y_close.csv" ]; then
+            CLOSE_TRADES=$(python3 -c "
+            import csv
+            try:
+                with open('artifacts/backtests/backtest_2y_close.csv', 'r') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        if row['metric'] == 'trades':
+                            print(row['value'])
+                            break
+            except:
+                print('0')
+            ")
+            echo "CLOSE_TRADES=$CLOSE_TRADES" >> $GITHUB_ENV
+          else
+            echo "CLOSE_TRADES=0" >> $GITHUB_ENV
+          fi
+          
+          if [ -f "artifacts/backtests/backtest_2y_onebar.csv" ]; then
+            ONEBAR_TRADES=$(python3 -c "
+            import csv
+            try:
+                with open('artifacts/backtests/backtest_2y_onebar.csv', 'r') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        if row['metric'] == 'trades':
+                            print(row['value'])
+                            break
+            except:
+                print('0')
+            ")
+            echo "ONEBAR_TRADES=$ONEBAR_TRADES" >> $GITHUB_ENV
+          else
+            echo "ONEBAR_TRADES=0" >> $GITHUB_ENV
+          fi
+
+      - name: Send Telegram notification (Success)
+        if: always() && job.status == 'success'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          START: ${{ env.START }}
+          END: ${{ env.END }}
+          CSV_COUNT: ${{ env.CSV_COUNT }}
+          CLOSE_TRADES: ${{ env.CLOSE_TRADES }}
+          ONEBAR_TRADES: ${{ env.ONEBAR_TRADES }}
+        run: |
+          python3 -c "
+          import os
+          import requests
+
+          token = os.getenv('TELEGRAM_BOT_TOKEN')
+          chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
+          if token and chat_id:
+              message = f'''✅ 2-Year Historical Backtest Complete
+              
+              Period: {os.getenv('START', 'N/A')} to {os.getenv('END', 'N/A')}
+              Generated {os.getenv('CSV_COUNT', 'N/A')} CSV files
+              
+              Results:
+              • Close mode: {os.getenv('CLOSE_TRADES', 'N/A')} trades
+              • Onebar mode: {os.getenv('ONEBAR_TRADES', 'N/A')} trades
+              
+              Artifacts: artifacts/backtests/'''
+              
+              url = f'https://api.telegram.org/bot{token}/sendMessage'
+              try:
+                  response = requests.post(url, json={'chat_id': chat_id, 'text': message})
+                  print(f'Telegram sent: {response.status_code}')
+              except Exception as e:
+                  print(f'Telegram error: {e}')
+          else:
+              print('Telegram credentials not available')
+          " || true
+
+      - name: Send Telegram notification (Failure)
+        if: always() && job.status == 'failure'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          START: ${{ env.START }}
+          END: ${{ env.END }}
+        run: |
+          python3 -c "
+          import os
+          import requests
+
+          token = os.getenv('TELEGRAM_BOT_TOKEN')
+          chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
+          if token and chat_id:
+              message = f'''❌ 2-Year Historical Backtest Failed
+              
+              Period: {os.getenv('START', 'N/A')} to {os.getenv('END', 'N/A')}
+              
+              Check the workflow logs for details.'''
+              
+              url = f'https://api.telegram.org/bot{token}/sendMessage'
+              try:
+                  response = requests.post(url, json={'chat_id': chat_id, 'text': message})
+                  print(f'Telegram sent: {response.status_code}')
+              except Exception as e:
+                  print(f'Telegram error: {e}')
+          else:
+              print('Telegram credentials not available')
+          " || true
+
+      - name: Upload backtest artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ env.START }}_${{ env.END }}
+          path: artifacts/backtests/
+          retention-days: 30
+
+      - name: Upload project analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-analysis-2y
+          path: TODO.md
+          retention-days: 30
+
+      - name: Job summary
+        if: always()
+        env:
+          START: ${{ env.START }}
+          END: ${{ env.END }}
+          CSV_COUNT: ${{ env.CSV_COUNT }}
+        run: |
+          echo "## 2-Year Historical Backtest Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Period:** ${{ env.START }} to ${{ env.END }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Generated files:** ${{ env.CSV_COUNT }} CSV artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifacts:**" >> $GITHUB_STEP_SUMMARY
+          echo "- backtest-2y-results (CSV files)" >> $GITHUB_STEP_SUMMARY
+          echo "- project-analysis-2y (TODO.md)" >> $GITHUB_STEP_SUMMARY
