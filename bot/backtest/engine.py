@@ -1,6 +1,6 @@
 """Backtesting engine."""
 
-from typing import Any
+from typing import Any, Callable, Optional
 
 from bot.core.exchange import PaperExchange
 from bot.data.ohlcv_source import OHLCVBar
@@ -11,6 +11,8 @@ def run_backtest(
     prices: list[OHLCVBar],
     strategy: Strategy,
     fee: float = 0.001,
+    verbose: bool = False,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[dict[str, Any], list[float]]:
     """Run backtest on historical data.
 
@@ -18,6 +20,8 @@ def run_backtest(
         prices: List of OHLCV bars
         strategy: Trading strategy
         fee: Trading fee rate
+        verbose: Enable verbose logging
+        progress_cb: Progress callback function(current, total)
 
     Returns:
         Tuple of (metrics dict, equity curve)
@@ -27,8 +31,19 @@ def run_backtest(
     trades: list[dict[str, Any]] = []
 
     initial_balance = exchange.balance
+    total_bars = len(prices)
 
-    for ts, o, h, low, c, v in prices:
+    for i, (ts, o, h, low, c, v) in enumerate(prices):
+        # Progress callback
+        if progress_cb and i % 1000 == 0:
+            progress_cb(i, total_bars)
+        
+        # Safety check for NaN/inf values
+        if any(not isinstance(x, (int, float)) or x != x or x == float('inf') or x == float('-inf') 
+               for x in [o, h, low, c, v]):
+            if verbose:
+                print(f"[engine] Warning: Invalid values at bar {i}: o={o}, h={h}, l={low}, c={c}, v={v}")
+            continue
         # Get strategy signal
         signal = strategy.on_bar(ts, o, h, low, c, v)
 
@@ -112,6 +127,8 @@ def run_backtest_onebar(
     bars: list[OHLCVBar],
     strategy: Strategy,
     fee: float = 0.001,
+    verbose: bool = False,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[dict[str, Any], list[float]]:
     """Run one-bar backtest on historical data.
 
@@ -123,14 +140,20 @@ def run_backtest_onebar(
         bars: List of OHLCV bars
         strategy: Trading strategy with signal() method
         fee: Trading fee rate
+        verbose: Enable verbose logging
+        progress_cb: Progress callback function(current, total)
 
     Returns:
         Tuple of (metrics dict, equity curve)
     """
     equity_curve = [1000.0]  # Starting equity
     trades: list[dict[str, Any]] = []
+    total_bars = len(bars)
 
     for t in range(1, len(bars)):
+        # Progress callback
+        if progress_cb and t % 1000 == 0:
+            progress_cb(t, total_bars)
         # Get signal using history < t (no look-ahead)
         # Handle both tuple and OHLCVBar formats
         history = []
@@ -151,6 +174,13 @@ def run_backtest_onebar(
             else:
                 entry_price = current_bar.open
                 exit_price = current_bar.close
+
+            # Safety check for NaN/inf values
+            if any(not isinstance(x, (int, float)) or x != x or x == float('inf') or x == float('-inf') 
+                   for x in [entry_price, exit_price]):
+                if verbose:
+                    print(f"[engine] Warning: Invalid prices at bar {t}: entry={entry_price}, exit={exit_price}")
+                continue
 
             # Calculate PnL with commission both ways
             pnl = (exit_price - entry_price) / entry_price
