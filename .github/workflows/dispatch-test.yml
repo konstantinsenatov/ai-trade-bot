@@ -1,0 +1,25 @@
+# This workflow supports manual dispatch via GitHub UI
+name: Dispatch Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_message:
+        description: 'Test message to display'
+        required: false
+        default: 'Hello from dispatch test!'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Display message
+        run: echo "${{ inputs.test_message }}"
+      
+      - name: Test Python
+        run: |
+          python3 -c "print('Python works in dispatch test!')"
+          echo "Dispatch test completed successfully!"

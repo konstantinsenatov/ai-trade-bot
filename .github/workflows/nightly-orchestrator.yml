@@ -1,3 +1,4 @@
+# This workflow supports manual dispatch via GitHub UI
 name: Nightly Orchestrator
 
 on:
