@@ -1,6 +1,6 @@
-# Self-Healing Dev Loop
+# AI Trade Bot
 
-An AI-driven development automation system with integrated trading bot capabilities.
+An AI-driven development automation system with integrated trading bot capabilities and cloud optimization pipeline.
 
 ## Bot module layout
 
@@ -269,6 +269,64 @@ Several ways to stop the orchestrator:
 - Скачайте артефакт `failed-diff` и посмотрите, что сгенерировал GPT
 - Оркестратор автоматически делает до 2 повторных запросов
 - Проверьте формат diff: должен начинаться с `diff --git` и содержать `+++`/`---`
+
+## Cloud Optimization (GitHub Actions)
+
+The system includes a cloud-based optimization pipeline that runs parameter grid searches across multiple shards for maximum efficiency.
+
+### Manual Execution
+
+**GitHub UI:**
+1. Go to **Actions** → **Cloud Optimization**
+2. Click **Run workflow**
+3. Configure parameters:
+   - **pair**: Trading pair (default: BTC/USDT)
+   - **timeframe**: Timeframe (default: 15m)
+   - **limit**: Number of bars (default: 3000)
+   - **shards**: Number of parallel shards 1-8 (default: 4)
+   - **top**: Top-N results to save (default: 5)
+
+**GitHub CLI:**
+```bash
+gh workflow run "Cloud Optimization" --ref main \
+  -f pair="BTC/USDT" \
+  -f timeframe="15m" \
+  -f limit=3000 \
+  -f shards=4 \
+  -f top=5
+```
+
+### Artifacts
+
+**Individual Shards:**
+- `optimization-<timestamp>-shard-<N>`: Results from each shard
+- Contains: `shard_N_results.csv`, `shard_N_top5.csv`
+
+**Aggregated Results:**
+- `optimization-aggregate`: Combined results from all shards
+- Contains: `combined_results.csv`, `summary.md`
+
+### Local Testing
+
+```bash
+# Test single shard locally
+make cloud-opt-local
+
+# Or directly:
+python3 scripts/cloud_optimize.py \
+  --pair "BTC/USDT" \
+  --timeframe "15m" \
+  --limit 3000 \
+  --shard-index 0 \
+  --shard-count 1 \
+  --top 5
+```
+
+### Scheduling
+
+The optimization runs automatically:
+- **Daily**: 02:00 UTC via cron schedule
+- **Parameters**: Default BTC/USDT 15m, 3000 bars, 4 shards
 
 ## Architecture
 

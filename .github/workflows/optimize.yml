@@ -1,0 +1,238 @@
+# This workflow supports manual dispatch via GitHub UI
+name: Cloud Optimization
+
+on:
+  workflow_dispatch:
+    inputs:
+      pair:
+        description: "Trading pair"
+        required: false
+        default: "BTC/USDT"
+        type: string
+      timeframe:
+        description: "Timeframe"
+        required: false
+        default: "15m"
+        type: string
+      limit:
+        description: "Number of bars"
+        required: false
+        default: "3000"
+        type: string
+      shards:
+        description: "Number of shards (1-8)"
+        required: false
+        default: "4"
+        type: string
+      top:
+        description: "Top-N results"
+        required: false
+        default: "5"
+        type: string
+  schedule:
+    - cron: "0 2 * * *"  # 02:00 UTC daily
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-optimize
+  cancel-in-progress: false
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TZ: UTC
+    strategy:
+      fail-fast: false
+      matrix:
+        shard_index: [0, 1, 2, 3]  # Will be overridden by shards input
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt
+          # parquet backend (if needed)
+          pip install -q pyarrow || true
+
+      - name: Create artifacts directory
+        run: mkdir -p artifacts/bench
+
+      - name: Run shard
+        id: runshard
+        run: |
+          python3 scripts/cloud_optimize.py \
+            --pair "${{ github.event.inputs.pair || 'BTC/USDT' }}" \
+            --timeframe "${{ github.event.inputs.timeframe || '15m' }}" \
+            --limit ${{ github.event.inputs.limit || 3000 }} \
+            --top ${{ github.event.inputs.top || 5 }} \
+            --seed 42 \
+            --shard-index ${{ matrix.shard_index }} \
+            --shard-count ${{ github.event.inputs.shards || 4 }}
+
+      - name: Collect run dir
+        id: collect
+        run: |
+          # Extract CLOUD_RUN_DIR from the last step output
+          RUN_DIR=$(grep -o 'CLOUD_RUN_DIR: .*' -m1 $GITHUB_STEP_SUMMARY || true)
+          # If not in SUMMARY, find by glob
+          if [ -z "$RUN_DIR" ]; then
+            RUN_DIR=$(ls -d artifacts/bench/cloud/* | sort | tail -n1 | sed 's/^/CLOUD_RUN_DIR: /')
+          fi
+          echo "$RUN_DIR" >> $GITHUB_STEP_SUMMARY
+          echo "run_dir=$(echo $RUN_DIR | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifacts (shards)
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimization-${{ steps.collect.outputs.run_dir || 'latest' }}-shard-${{ matrix.shard_index }}
+          path: |
+            ${{ steps.collect.outputs.run_dir }}/shard_*_results.csv
+            ${{ steps.collect.outputs.run_dir }}/shard_*_top*.csv
+          retention-days: 30
+
+  aggregate:
+    needs: optimize
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: _dl
+
+      - name: Aggregate CSVs
+        id: agg
+        run: |
+          python - <<'PY'
+          import csv, glob, os, json
+          os.makedirs("artifacts/bench/aggregate", exist_ok=True)
+          rows=[]
+          for f in glob.glob("_dl/**/shard_*_results.csv", recursive=True):
+              with open(f,newline="") as fh:
+                  rd = list(csv.DictReader(fh))
+                  rows += rd
+          out="artifacts/bench/aggregate/combined_results.csv"
+          if rows:
+              # normalize fields and write
+              keys=sorted({k for r in rows for k in r.keys()})
+              with open(out,"w",newline="") as fh:
+                  wr=csv.DictWriter(fh, fieldnames=keys)
+                  wr.writeheader(); wr.writerows(rows)
+              print("COMBINED_RESULTS:", out)
+              print(f"Total configurations: {len(rows)}")
+          else:
+              print("COMBINED_RESULTS: (none)")
+              print("Total configurations: 0")
+          PY
+
+      - name: Generate summary report
+        run: |
+          python - <<'PY'
+          import csv, os
+          if os.path.exists("artifacts/bench/aggregate/combined_results.csv"):
+              with open("artifacts/bench/aggregate/combined_results.csv", "r") as f:
+                  reader = csv.DictReader(f)
+                  rows = list(reader)
+              
+              # Filter valid configurations (3-80 trades)
+              valid = [r for r in rows if 3 <= int(r.get('trades', 0)) <= 80]
+              
+              # Sort by PF desc, equity desc, max_dd asc
+              valid.sort(key=lambda x: (-float(x.get('pf', 0)), -float(x.get('equity', 0)), float(x.get('max_dd', 1))))
+              
+              # Generate summary
+              summary = f"""## Cloud Optimization Summary
+
+          **Parameters:**
+          - Pair: ${{ github.event.inputs.pair || 'BTC/USDT' }}
+          - Timeframe: ${{ github.event.inputs.timeframe || '15m' }}
+          - Bars: ${{ github.event.inputs.limit || 3000 }}
+          - Shards: ${{ github.event.inputs.shards || 4 }}
+
+          **Results:**
+          - Total configurations tested: {len(rows)}
+          - Valid configurations (3-80 trades): {len(valid)}
+
+          **Top 5 Configurations:**
+          """
+              
+              if valid:
+                  summary += "| Rank | Trades | PF | Equity | MaxDD | ZS | ADX | ATR | CD |\n"
+                  summary += "|------|--------|----|---------|-------|----|----|----|----|\n"
+                  
+                  for i, config in enumerate(valid[:5]):
+                      rank = i + 1
+                      trades = config.get('trades', '0')
+                      pf = config.get('pf', '0')
+                      equity = config.get('equity', '0')
+                      max_dd = config.get('max_dd', '1')
+                      zs = config.get('zs_threshold', '0')
+                      adx = config.get('adx_max', '0')
+                      atr = config.get('atrpct_min', '0')
+                      cd = config.get('min_bars_cooldown', '0')
+                      
+                      summary += f"| {rank} | {trades} | {pf} | {equity} | {max_dd} | {zs} | {adx} | {atr} | {cd} |\n"
+                  
+                  # Best config
+                  best = valid[0]
+                  summary += f"\n**Recommended Config:**\n"
+                  summary += f"`--zs-threshold {best.get('zs_threshold', '0')} --adx-max {best.get('adx_max', '0')} --atrpct-min {best.get('atrpct_min', '0')} --min-bars-cooldown {best.get('min_bars_cooldown', '0')}`\n"
+              else:
+                  summary += "No valid configurations found.\n"
+              
+              print(summary)
+              with open("artifacts/bench/aggregate/summary.md", "w") as f:
+                  f.write(summary)
+          PY
+
+      - name: Upload aggregate
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimization-aggregate
+          path: artifacts/bench/aggregate/**
+          retention-days: 30
+
+      - name: Telegram notify (optional)
+        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
+        run: |
+          MSG="✅ Cloud optimization finished.
+          - Shards: ${{ github.event.inputs.shards || 4 }}
+          - Pair/TF: ${{ github.event.inputs.pair || 'BTC/USDT' }} / ${{ github.event.inputs.timeframe || '15m' }}
+          - Bars: ${{ github.event.inputs.limit || 3000 }}
+          - Total configs: $(grep 'Total configurations:' artifacts/bench/aggregate/summary.md | cut -d: -f2 | tr -d ' ')
+          - Valid configs: $(grep 'Valid configurations' artifacts/bench/aggregate/summary.md | cut -d: -f2 | tr -d ' ')
+          Посмотри артефакты: optimization-aggregate"
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d text="$MSG" || true
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f "artifacts/bench/aggregate/summary.md" ]; then
+            cat artifacts/bench/aggregate/summary.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## Cloud Optimization Summary" >> $GITHUB_STEP_SUMMARY
+            echo "❌ No summary generated" >> $GITHUB_STEP_SUMMARY
+          fi

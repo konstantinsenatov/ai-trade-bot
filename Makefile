@@ -31,4 +31,7 @@ smoke-real:
 bench-small:
 	python3 scripts/bench_small.py
 
+cloud-opt-local:
+	python3 scripts/cloud_optimize.py --pair "BTC/USDT" --timeframe "15m" --limit 3000 --shard-index 0 --shard-count 1 --top 5
+
 all: install lint types test

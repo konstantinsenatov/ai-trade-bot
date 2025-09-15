@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Small grid search for Onebar strategy optimization."""
 
+import argparse
 import csv
 import json
 import re
@@ -22,6 +23,9 @@ def run_backtest_with_params(
     adx_max: float,
     atrpct_min: float,
     min_bars_cooldown: int,
+    pair: str = "BTC/USDT",
+    timeframe: str = "15m",
+    limit: int = 3000,
     verbose: bool = False
 ) -> Dict:
     """Run backtest with specific parameters and return metrics."""
@@ -31,9 +35,9 @@ def run_backtest_with_params(
         "--mode", "onebar",
         "--strategy", "optimized",
         "--data-source", "real",
-        "--pair", "BTC/USDT",
-        "--timeframe", "15m",
-        "--limit", "2000",
+        "--pair", pair,
+        "--timeframe", timeframe,
+        "--limit", str(limit),
         "--zs-threshold", str(zs_threshold),
         "--adx-max", str(adx_max),
         "--atrpct-min", str(atrpct_min),
@@ -150,7 +154,12 @@ def run_backtest_with_params(
         }
 
 
-def run_grid_search(soft_mode: bool = False) -> List[Dict]:
+def run_grid_search(
+    pair: str = "BTC/USDT",
+    timeframe: str = "15m", 
+    limit: int = 3000,
+    soft_mode: bool = False
+) -> List[Dict]:
     """Run grid search with specified parameter ranges."""
     
     if soft_mode:
@@ -184,7 +193,8 @@ def run_grid_search(soft_mode: bool = False) -> List[Dict]:
                     print(f"[{current}/{total_combinations}] Testing: zs={zs_threshold}, adx={adx_max}, atr={atrpct_min}, cd={min_bars_cooldown}")
                     
                     result = run_backtest_with_params(
-                        zs_threshold, adx_max, atrpct_min, min_bars_cooldown, verbose=False
+                        zs_threshold, adx_max, atrpct_min, min_bars_cooldown, 
+                        pair, timeframe, limit, verbose=False
                     )
                     
                     results.append(result)
@@ -220,10 +230,14 @@ def filter_and_sort_results(results: List[Dict]) -> List[Dict]:
     return sorted_results
 
 
-def save_results_csv(results: List[Dict], filename: str) -> None:
+def save_results_csv(results: List[Dict], filename: str, top_n: int = 5, output_dir: Path = None) -> None:
     """Save results to CSV file."""
     
-    output_dir = Path("artifacts/bench")
+    if output_dir is None:
+        output_dir = Path("artifacts/bench")
+    else:
+        output_dir = Path(output_dir)
+    
     output_dir.mkdir(parents=True, exist_ok=True)
     
     output_path = output_dir / filename
@@ -251,7 +265,31 @@ def save_results_csv(results: List[Dict], filename: str) -> None:
             row = {k: v for k, v in result.items() if k != "error"}
             writer.writerow(row)
     
-    print(f"💾 Results saved to: {output_path}")
+    print(f"💾 Results saved to: {output_path}", flush=True)
+    
+    # Save Top-N results separately
+    if results:
+        top_n_results = results[:top_n]
+        top_filename = filename.replace('.csv', f'_top{top_n}.csv')
+        top_path = output_dir / top_filename
+        
+        with open(top_path, 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for result in top_n_results:
+                params_json = json.dumps({
+                    "zs_threshold": result["zs_threshold"],
+                    "adx_max": result["adx_max"],
+                    "atrpct_min": result["atrpct_min"],
+                    "min_bars_cooldown": result["min_bars_cooldown"]
+                })
+                result["params_json"] = params_json
+                
+                row = {k: v for k, v in result.items() if k != "error"}
+                writer.writerow(row)
+        
+        print(f"💾 Top-{top_n} results saved to: {top_path}", flush=True)
 
 
 def print_top_results(results: List[Dict], top_n: int = 5) -> None:
@@ -312,40 +350,65 @@ def generate_markdown_table(results: List[Dict], top_n: int = 5) -> str:
 def main() -> int:
     """Main function for grid search."""
     
-    print("🔍 Onebar Strategy Grid Search")
-    print("=" * 50)
+    parser = argparse.ArgumentParser(description="Onebar Strategy Grid Search")
+    parser.add_argument("--pair", type=str, default="BTC/USDT", help="Trading pair (default: BTC/USDT)")
+    parser.add_argument("--timeframe", type=str, default="15m", help="Timeframe (default: 15m)")
+    parser.add_argument("--limit", type=int, default=3000, help="Number of bars to fetch (default: 3000)")
+    parser.add_argument("--out", type=str, default="artifacts/bench/bench_small.csv", help="Output CSV path (default: artifacts/bench/bench_small.csv)")
+    parser.add_argument("--top", type=int, default=5, help="Number of top results to save/print (default: 5)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for deterministic results (default: 42)")
+    
+    args = parser.parse_args()
+    
+    print("🔍 Onebar Strategy Grid Search", flush=True)
+    print("=" * 50, flush=True)
+    print(f"📊 Pair: {args.pair}", flush=True)
+    print(f"📊 Timeframe: {args.timeframe}", flush=True)
+    print(f"📊 Bars: {args.limit}", flush=True)
+    print(f"📊 Top-N: {args.top}", flush=True)
+    print(f"📊 Seed: {args.seed}", flush=True)
+    print()
+    
+    # Ensure output directory exists
+    output_path = Path(args.out)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Run standard grid search
-    results = run_grid_search(soft_mode=False)
+    results = run_grid_search(args.pair, args.timeframe, args.limit, soft_mode=False)
     
     # Check if we got any trades
     total_trades = sum(r["trades"] for r in results)
     if total_trades == 0:
-        print("⚠️  No trades found in standard grid search. Running soft mode...")
-        results = run_grid_search(soft_mode=True)
+        print("⚠️  No trades found in standard grid search. Running soft mode...", flush=True)
+        results = run_grid_search(args.pair, args.timeframe, args.limit, soft_mode=True)
     
     # Filter and sort results
     filtered_results = filter_and_sort_results(results)
     
     # Save results
-    save_results_csv(filtered_results, "bench_small.csv")
+    save_results_csv(filtered_results, args.out, args.top)
     
     # Print top results
-    print_top_results(filtered_results, top_n=5)
+    print_top_results(filtered_results, top_n=args.top)
     
     # Generate markdown table
-    md_table = generate_markdown_table(filtered_results, top_n=5)
-    print("📋 MARKDOWN TABLE:")
+    md_table = generate_markdown_table(filtered_results, top_n=args.top)
+    print("📋 MARKDOWN TABLE:", flush=True)
     print()
-    print(md_table)
+    print(md_table, flush=True)
     print()
     
     # Print recommended config
     if filtered_results:
         best = filtered_results[0]
-        print("🎯 RECOMMENDED CONFIG:")
-        print(f"--zs-threshold {best['zs_threshold']} --adx-max {best['adx_max']} --atrpct-min {best['atrpct_min']} --min-bars-cooldown {best['min_bars_cooldown']}")
+        recommended_args = f"--zs-threshold {best['zs_threshold']} --adx-max {best['adx_max']} --atrpct-min {best['atrpct_min']} --min-bars-cooldown {best['min_bars_cooldown']}"
+        print("🎯 RECOMMENDED CONFIG:", flush=True)
+        print(recommended_args, flush=True)
         print()
+        print(f"RECOMMENDED_ARGS: {recommended_args}", flush=True)
+    else:
+        print("❌ No valid configurations found", flush=True)
+        return 1
     
     return 0
 
