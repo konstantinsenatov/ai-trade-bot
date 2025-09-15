@@ -218,6 +218,30 @@ def main() -> int:
         help="ATR percentage threshold for volatility filter (default: 0.005)",
     )
     parser.add_argument(
+        "--zs-threshold",
+        type=float,
+        default=2.0,
+        help="Z-score threshold for entry (default: 2.0)",
+    )
+    parser.add_argument(
+        "--adx-max",
+        type=float,
+        default=25.0,
+        help="ADX maximum for mean reversion trading (default: 25.0)",
+    )
+    parser.add_argument(
+        "--atrpct-min",
+        type=float,
+        default=0.005,
+        help="Minimum ATR percentage for trading (default: 0.005)",
+    )
+    parser.add_argument(
+        "--min-bars-cooldown",
+        type=int,
+        default=5,
+        help="Minimum bars between trades (default: 5)",
+    )
+    parser.add_argument(
         "--pretty",
         action="store_true",
         help="Generate beautiful structural report with emojis",
@@ -344,9 +368,10 @@ def main() -> int:
             window=20,
             threshold=args.threshold,
             timeframe="15m",
-            zscore_threshold=args.zscore_threshold,
-            adx_threshold=args.adx_threshold,
-            atr_threshold=args.atr_threshold,
+            zscore_threshold=args.zs_threshold,
+            adx_threshold=args.adx_max,
+            atr_threshold=args.atrpct_min,
+            min_bars_cooldown=args.min_bars_cooldown,
         )
     else:
         strategy = MeanReversion(window=20, threshold=args.threshold, timeframe="15m")

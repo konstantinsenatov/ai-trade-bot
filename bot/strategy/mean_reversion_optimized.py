@@ -22,6 +22,7 @@ class MeanReversionOptimized(Strategy):
         zscore_threshold: float = 2.0,
         adx_threshold: float = 25.0,
         atr_threshold: float = 0.005,
+        min_bars_cooldown: int = 5,
     ):
         """Initialize optimized mean reversion strategy.
 
@@ -32,6 +33,7 @@ class MeanReversionOptimized(Strategy):
             zscore_threshold: Z-score threshold for entry (2.0 = 2 standard deviations)
             adx_threshold: ADX threshold for trend filter (25 = range-bound market)
             atr_threshold: ATR percentage threshold for volatility filter (0.5%)
+            min_bars_cooldown: Minimum bars between trades (5 = cooldown period)
         """
         self.window = window
         self.threshold = threshold
@@ -42,12 +44,16 @@ class MeanReversionOptimized(Strategy):
         self.zscore_threshold = zscore_threshold
         self.adx_threshold = adx_threshold
         self.atr_threshold = atr_threshold
+        self.min_bars_cooldown = min_bars_cooldown
         
         # Data storage
         self.prices: deque[float] = deque(maxlen=window)
         self.highs: deque[float] = deque(maxlen=window)
         self.lows: deque[float] = deque(maxlen=window)
         self.volumes: deque[int] = deque(maxlen=window)
+        
+        # Cooldown tracking
+        self.last_trade_bar = -1
 
     def _calculate_zscore(self, prices: list[float]) -> float:
         """Calculate Z-score for the last price.
@@ -198,6 +204,11 @@ class MeanReversionOptimized(Strategy):
         highs_list = list(self.highs)
         lows_list = list(self.lows)
 
+        # Filter 0: Cooldown filter - minimum bars between trades
+        current_bar = len(prices_list) - 1
+        if self.last_trade_bar >= 0 and (current_bar - self.last_trade_bar) < self.min_bars_cooldown:
+            return None  # Still in cooldown period
+
         # Filter 1: Z-score threshold - only trade on significant deviations
         zscore = self._calculate_zscore(prices_list)
         if zscore < self.zscore_threshold:
@@ -218,15 +229,17 @@ class MeanReversionOptimized(Strategy):
 
         # Mean reversion signals (only if all filters pass)
         if c < sma * (1 - self.threshold):
+            self.last_trade_bar = current_bar
             return "buy"
         elif c > sma * (1 + self.threshold):
+            self.last_trade_bar = current_bar
             return "sell"
         else:
             return None
 
     def name(self) -> str:
         """Get strategy name."""
-        return f"MeanReversionOpt_{self.window}_{self.threshold}_z{self.zscore_threshold}_adx{self.adx_threshold}_atr{self.atr_threshold}"
+        return f"MeanReversionOpt_{self.window}_{self.threshold}_z{self.zscore_threshold}_adx{self.adx_threshold}_atr{self.atr_threshold}_cd{self.min_bars_cooldown}"
 
     def signal(self, history: list[tuple[int, float, float, float, float]]) -> Optional[str]:
         """Calculate signal using historical data with filters.

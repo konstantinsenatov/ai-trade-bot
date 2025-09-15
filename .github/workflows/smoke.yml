@@ -1,0 +1,283 @@
+# This workflow supports manual dispatch via GitHub UI
+name: Smoke Tests
+
+on:
+  schedule:
+    # Run daily at 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Type of smoke test to run'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - historical
+          - real
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: UTC
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install requests
+
+      - name: Create artifacts directory
+        run: mkdir -p artifacts/backtests
+
+      - name: Run historical smoke test
+        if: ${{ github.event.inputs.test_type == 'both' || github.event.inputs.test_type == 'historical' || github.event.inputs.test_type == '' }}
+        run: make smoke-hist
+
+      - name: Run real data smoke test
+        if: ${{ github.event.inputs.test_type == 'both' || github.event.inputs.test_type == 'real' || github.event.inputs.test_type == '' }}
+        run: make smoke-real
+
+      - name: Parse results and prepare summary
+        id: parse_results
+        run: |
+          # Parse historical results
+          if [ -f "artifacts/backtests/onebar_hist_smoke.csv" ]; then
+            HIST_TRADES=$(python3 -c "
+          import csv
+          try:
+              with open('artifacts/backtests/onebar_hist_smoke.csv', 'r') as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      print(row['trades'])
+                      break
+          except:
+              print('0')
+            ")
+            HIST_EQUITY=$(python3 -c "
+          import csv
+          try:
+              with open('artifacts/backtests/onebar_hist_smoke.csv', 'r') as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      print(row['final_equity'])
+                      break
+          except:
+              print('0')
+            ")
+            HIST_PF=$(python3 -c "
+          import csv
+          try:
+              with open('artifacts/backtests/onebar_hist_smoke.csv', 'r') as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      print(row['pf'])
+                      break
+          except:
+              print('0')
+            ")
+            HIST_DD=$(python3 -c "
+          import csv
+          try:
+              with open('artifacts/backtests/onebar_hist_smoke.csv', 'r') as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      print(row['max_dd'])
+                      break
+          except:
+              print('1')
+            ")
+          else
+            HIST_TRADES="N/A"
+            HIST_EQUITY="N/A"
+            HIST_PF="N/A"
+            HIST_DD="N/A"
+          fi
+
+          # Parse real data results
+          if [ -f "artifacts/backtests/onebar_real_smoke.csv" ]; then
+            REAL_TRADES=$(python3 -c "
+          import csv
+          try:
+              with open('artifacts/backtests/onebar_real_smoke.csv', 'r') as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      print(row['trades'])
+                      break
+          except:
+              print('0')
+            ")
+            REAL_EQUITY=$(python3 -c "
+          import csv
+          try:
+              with open('artifacts/backtests/onebar_real_smoke.csv', 'r') as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      print(row['final_equity'])
+                      break
+          except:
+              print('0')
+            ")
+            REAL_PF=$(python3 -c "
+          import csv
+          try:
+              with open('artifacts/backtests/onebar_real_smoke.csv', 'r') as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      print(row['pf'])
+                      break
+          except:
+              print('0')
+            ")
+            REAL_DD=$(python3 -c "
+          import csv
+          try:
+              with open('artifacts/backtests/onebar_real_smoke.csv', 'r') as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      print(row['max_dd'])
+                      break
+          except:
+              print('1')
+            ")
+          else
+            REAL_TRADES="N/A"
+            REAL_EQUITY="N/A"
+            REAL_PF="N/A"
+            REAL_DD="N/A"
+          fi
+
+          echo "HIST_TRADES=$HIST_TRADES" >> $GITHUB_OUTPUT
+          echo "HIST_EQUITY=$HIST_EQUITY" >> $GITHUB_OUTPUT
+          echo "HIST_PF=$HIST_PF" >> $GITHUB_OUTPUT
+          echo "HIST_DD=$HIST_DD" >> $GITHUB_OUTPUT
+          echo "REAL_TRADES=$REAL_TRADES" >> $GITHUB_OUTPUT
+          echo "REAL_EQUITY=$REAL_EQUITY" >> $GITHUB_OUTPUT
+          echo "REAL_PF=$REAL_PF" >> $GITHUB_OUTPUT
+          echo "REAL_DD=$REAL_DD" >> $GITHUB_OUTPUT
+
+      - name: Send Telegram notification (Success)
+        if: always() && job.status == 'success'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          HIST_TRADES: ${{ steps.parse_results.outputs.HIST_TRADES }}
+          HIST_EQUITY: ${{ steps.parse_results.outputs.HIST_EQUITY }}
+          HIST_PF: ${{ steps.parse_results.outputs.HIST_PF }}
+          HIST_DD: ${{ steps.parse_results.outputs.HIST_DD }}
+          REAL_TRADES: ${{ steps.parse_results.outputs.REAL_TRADES }}
+          REAL_EQUITY: ${{ steps.parse_results.outputs.REAL_EQUITY }}
+          REAL_PF: ${{ steps.parse_results.outputs.REAL_PF }}
+          REAL_DD: ${{ steps.parse_results.outputs.REAL_DD }}
+        run: |
+          python3 -c "
+          import os
+          import requests
+
+          token = os.getenv('TELEGRAM_BOT_TOKEN')
+          chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
+          if token and chat_id:
+              message = f'''✅ Smoke Tests Complete
+              
+              Historical Data:
+              • Trades: {os.getenv('HIST_TRADES', 'N/A')}
+              • Equity: {os.getenv('HIST_EQUITY', 'N/A')}
+              • PF: {os.getenv('HIST_PF', 'N/A')}
+              • DD: {os.getenv('HIST_DD', 'N/A')}
+              
+              Real Data (BTC/USDT):
+              • Trades: {os.getenv('REAL_TRADES', 'N/A')}
+              • Equity: {os.getenv('REAL_EQUITY', 'N/A')}
+              • PF: {os.getenv('REAL_PF', 'N/A')}
+              • DD: {os.getenv('REAL_DD', 'N/A')}
+              
+              All smoke tests passed!'''
+              
+              url = f'https://api.telegram.org/bot{token}/sendMessage'
+              try:
+                  response = requests.post(url, json={'chat_id': chat_id, 'text': message})
+                  print(f'Telegram sent: {response.status_code}')
+              except Exception as e:
+                  print(f'Telegram error: {e}')
+          else:
+              print('Telegram credentials not available')
+          " || true
+
+      - name: Send Telegram notification (Failure)
+        if: always() && job.status == 'failure'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 -c "
+          import os
+          import requests
+
+          token = os.getenv('TELEGRAM_BOT_TOKEN')
+          chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
+          if token and chat_id:
+              message = f'''❌ Smoke Tests Failed
+              
+              Check the workflow logs for details.
+              Historical or real data tests may have failed.'''
+              
+              url = f'https://api.telegram.org/bot{token}/sendMessage'
+              try:
+                  response = requests.post(url, json={'chat_id': chat_id, 'text': message})
+                  print(f'Telegram sent: {response.status_code}')
+              except Exception as e:
+                  print(f'Telegram error: {e}')
+          else:
+              print('Telegram credentials not available')
+          " || true
+
+      - name: Upload smoke test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-results
+          path: artifacts/backtests/
+          retention-days: 7
+
+      - name: Job summary
+        if: always()
+        env:
+          HIST_TRADES: ${{ steps.parse_results.outputs.HIST_TRADES }}
+          HIST_EQUITY: ${{ steps.parse_results.outputs.HIST_EQUITY }}
+          REAL_TRADES: ${{ steps.parse_results.outputs.REAL_TRADES }}
+          REAL_EQUITY: ${{ steps.parse_results.outputs.REAL_EQUITY }}
+        run: |
+          echo "## Smoke Tests Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Historical Data:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Trades: ${{ env.HIST_TRADES }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Equity: ${{ env.HIST_EQUITY }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Real Data (BTC/USDT):**" >> $GITHUB_STEP_SUMMARY
+          echo "- Trades: ${{ env.REAL_TRADES }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Equity: ${{ env.REAL_EQUITY }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifacts:**" >> $GITHUB_STEP_SUMMARY
+          echo "- smoke-test-results (CSV files)" >> $GITHUB_STEP_SUMMARY
