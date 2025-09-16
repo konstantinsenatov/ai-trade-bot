@@ -40,16 +40,24 @@ jobs:
           echo "start=$START" >> "$GITHUB_OUTPUT"
           echo "end=$END" >> "$GITHUB_OUTPUT"
 
-      - name: Dispatch bench-nightly via gh CLI
+      - name: Dispatch bench-nightly via REST API
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          gh workflow run 189118732 \
-            --repo "${GITHUB_REPOSITORY}" \
-            -f start_date="${{ steps.win.outputs.start }}" \
-            -f end_date="${{ steps.win.outputs.end }}"
+          curl -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/189118732/dispatches" \
+            -d '{
+              "ref": "main",
+              "inputs": {
+                "start_date": "${{ steps.win.outputs.start }}",
+                "end_date": "${{ steps.win.outputs.end }}"
+              }
+            }'
 
       - name: Link to latest bench run
         env:
